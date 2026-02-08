@@ -16,7 +16,7 @@ Switches the primary GPU output by:
 
 ## NixOS configuration
 Minimal flake example:
-```
+```nix
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -47,12 +47,12 @@ Minimal flake example:
 ```
 
 ## Build
-```
+```console
 go build -o msi-gpu-switcher .
 ```
 
 ## Usage
-```
+```console
 sudo ./msi-gpu-switcher status [--debug]
 sudo ./msi-gpu-switcher igpu [--debug]
 sudo ./msi-gpu-switcher dgpu [--debug]
