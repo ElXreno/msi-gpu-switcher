@@ -53,9 +53,24 @@ go build -o msi-gpu-switcher .
 
 ## Usage
 ```console
-sudo ./msi-gpu-switcher status [--debug]
-sudo ./msi-gpu-switcher igpu [--debug]
-sudo ./msi-gpu-switcher dgpu [--debug]
+msi-gpu-switcher
+Switch primary GPU output using UEFI vars and EC trigger.
+
+Usage:
+  gpu-switcher [command]
+
+Available Commands:
+  completion  Generate the autocompletion script for the specified shell
+  dgpu        Switch to dGPU (discrete)
+  help        Help about any command
+  igpu        Switch to iGPU (hybrid)
+  status      Show current GPU/MUX/UEFI status
+
+Flags:
+      --debug   enable debug logging
+  -h, --help    help for gpu-switcher
+
+Use "gpu-switcher [command] --help" for more information about a command.
 ```
 
 ## Notes
