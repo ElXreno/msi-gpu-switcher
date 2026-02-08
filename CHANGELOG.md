@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/ElXreno/msi-gpu-switcher/compare/v0.1.0...v0.1.1) (2026-02-08)
+
+
+### Bug Fixes
+
+* **ci:** Replace old archives.format with archives.formats ([3476b2c](https://github.com/ElXreno/msi-gpu-switcher/commit/3476b2c512eaaeb0119d0bf8e0390a3b50250986))
+* **ci:** Set goreleaser version ([59af080](https://github.com/ElXreno/msi-gpu-switcher/commit/59af080bf98ce399c4b0f397e3b3c1b04ccb83b2))
+
 ## 0.1.0 (2026-02-08)
 
 
