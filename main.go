@@ -30,9 +30,12 @@ const (
 const (
 	uefiVarName  = "MsiDCVarData"
 	uefiVarGuid  = "DD96BAAF-145E-4F56-B1CF-193256298E99"
-	uefiVarPath  = "/sys/firmware/efi/efivars/MsiDCVarData-DD96BAAF-145E-4F56-B1CF-193256298E99"
 	uefiDataBase = 4
 	uefiModeByte = 1
+)
+
+var (
+	uefiVarPath = "/sys/firmware/efi/efivars/MsiDCVarData-DD96BAAF-145E-4F56-B1CF-193256298E99"
 )
 
 type gpuInfo struct {
@@ -341,7 +344,7 @@ func writeUefiVar(attrs uint32, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("prepare uefi var failed: %w", err)
 	}
-	if err := os.WriteFile(uefiVarPath, payload, 0); err != nil {
+	if err := os.WriteFile(uefiVarPath, payload, 0o644); err != nil {
 		if restore != nil {
 			restore()
 		}
