@@ -1,0 +1,36 @@
+project_name: msi-gpu-switcher
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: msi-gpu-switcher
+    main: .
+    binary: msi-gpu-switcher
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - CHANGELOG.md
+
+nfpms:
+  - id: packages
+    package_name: msi-gpu-switcher
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Arch }}"
+    maintainer: "msi-gpu-switcher maintainers"
+    description: "GPU MUX switcher for MSI laptops"
+    license: "MIT"
+    formats:
+      - deb
+      - rpm
