@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -427,33 +428,60 @@ func makeUefiVarMutable() (func(), error) {
 		return nil, err
 	}
 
+	// Try ioctl first
 	flags, err := unix.IoctlGetInt(int(fd.Fd()), unix.FS_IOC_GETFLAGS)
-	if err != nil {
-		_ = fd.Close()
-		if errors.Is(err, unix.ENOTTY) {
+	if err == nil {
+		if flags&int(unix.STATX_ATTR_IMMUTABLE) == 0 {
+			_ = fd.Close()
 			return nil, nil
 		}
-		return nil, err
+		newFlags := flags &^ int(unix.STATX_ATTR_IMMUTABLE)
+		if err := unix.IoctlSetInt(int(fd.Fd()), unix.FS_IOC_SETFLAGS, newFlags); err == nil {
+			log.Debug().Msg("cleared immutable flag via ioctl")
+			restore := func() {
+				if err := unix.IoctlSetInt(int(fd.Fd()), unix.FS_IOC_SETFLAGS, flags); err != nil {
+					log.Warn().Msgf("ioctl restore failed (%v), falling back to chattr +i", err)
+					_ = fd.Close()
+					cmd := exec.Command("chattr", "+i", uefiVarPath)
+					if out, err := cmd.CombinedOutput(); err != nil {
+						log.Warn().Msgf("chattr +i failed: %v (%s)", err, strings.TrimSpace(string(out)))
+					}
+					return
+				}
+				_ = fd.Close()
+			}
+			return restore, nil
+		}
 	}
+	_ = fd.Close()
 
-	if flags&int(unix.STATX_ATTR_IMMUTABLE) == 0 {
-		_ = fd.Close()
-		return nil, nil
-	}
-
-	newFlags := flags &^ int(unix.STATX_ATTR_IMMUTABLE)
-	if err := unix.IoctlSetInt(int(fd.Fd()), unix.FS_IOC_SETFLAGS, newFlags); err != nil {
-		_ = fd.Close()
-		return nil, err
+	// Fallback to chattr
+	log.Debug().Msg("ioctl failed, falling back to chattr -i")
+	cmd := exec.Command("chattr", "-i", uefiVarPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("chattr -i failed: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
 
 	restore := func() {
-		if err := unix.IoctlSetInt(int(fd.Fd()), unix.FS_IOC_SETFLAGS, flags); err != nil {
-			log.Warn().Msgf("failed to restore uefi immutable flag: %v", err)
+		rfd, err := os.Open(uefiVarPath)
+		if err == nil {
+			flags, err := unix.IoctlGetInt(int(rfd.Fd()), unix.FS_IOC_GETFLAGS)
+			if err == nil {
+				newFlags := flags | int(unix.STATX_ATTR_IMMUTABLE)
+				if err := unix.IoctlSetInt(int(rfd.Fd()), unix.FS_IOC_SETFLAGS, newFlags); err == nil {
+					log.Debug().Msg("restored immutable flag via ioctl")
+					_ = rfd.Close()
+					return
+				}
+			}
+			_ = rfd.Close()
 		}
-		_ = fd.Close()
+		log.Debug().Msg("ioctl restore failed, falling back to chattr +i")
+		cmd := exec.Command("chattr", "+i", uefiVarPath)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			log.Warn().Msgf("chattr +i failed: %v (%s)", err, strings.TrimSpace(string(out)))
+		}
 	}
-
 	return restore, nil
 }
 
