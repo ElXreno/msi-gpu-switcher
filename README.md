@@ -1,21 +1,31 @@
 # msi-gpu-switcher
 
-Minimal GPU MUX switcher for MSI laptops.
+Minimal GPU MUX switcher for MSI laptops on Linux.
 
-## What it does
-Switches the primary GPU output by:
-- Writing the UEFI variable `MsiDCVarData` (GUID `DD96BAAF-145E-4F56-B1CF-193256298E99`)
-- Triggering the EC switch (`0xD1`)
-- Toggling the EC MUX bit (`0x2E`, mask `0x40`)
+> ⚠️ **Use at your own risk.** This tool writes directly to UEFI variables and
+> Embedded Controller registers. I take no responsibility for any damage or loss
+> caused by its use.
+
+## Tested Hardware
+
+| Laptop | EC Firmware |
+|--------|-------------|
+| MSI Alpha 17 C7VG | `17KKIMS1.114` |
+
+> Other MSI models may work if they share the same UEFI variable and EC layout.
+> Open an issue with your model and firmware version if it works or fails.
 
 ## Requirements
-- Linux with `efivarfs` mounted at `/sys/firmware/efi/efivars`
-- `ec_sys` kernel module (load with `write_support=1`)
-- `debugfs` mounted at `/sys/kernel/debug`
-- Root privileges for `igpu`/`dgpu`
 
-## NixOS configuration
-Minimal flake example:
+- Linux with `efivarfs` mounted at `/sys/firmware/efi/efivars`
+- `ec_sys` kernel module loaded with `write_support=1`
+- `debugfs` mounted at `/sys/kernel/debug`
+- Root privileges
+
+## Installation
+
+### NixOS
+
 ```nix
 {
   inputs = {
@@ -46,17 +56,15 @@ Minimal flake example:
 }
 ```
 
-## Build
+### Manual build
+
 ```console
 go build -o msi-gpu-switcher .
 ```
 
 ## Usage
-```console
-msi-gpu-switcher
-Switch primary GPU output using UEFI vars and EC trigger.
 
-Usage:
+```console
   gpu-switcher [command]
 
 Available Commands:
@@ -69,19 +77,40 @@ Available Commands:
 Flags:
       --debug   enable debug logging
   -h, --help    help for gpu-switcher
-
-Use "gpu-switcher [command] --help" for more information about a command.
 ```
 
+> **A reboot is required after switching.**
+
+## Troubleshooting
+
+**UEFI variable is immutable:**
+```console
+chattr -i /sys/firmware/efi/efivars/MsiDCVarData-DD96BAAF-145E-4F56-B1CF-193256298E99
+```
+The tool attempts this automatically via `FS_IOC_SETFLAGS`; run manually if it fails.
+
+**EC writes fail — reload `ec_sys` with write support:**
+```console
+modprobe -r ec_sys && modprobe ec_sys write_support=1
+```
+
+**`ec0` not found — mount debugfs:**
+```console
+mount -t debugfs none /sys/kernel/debug
+```
+
+## How it works
+
+<details>
+<summary>Low-level details</summary>
+
+Switches the primary GPU output by:
+- Writing the UEFI variable `MsiDCVarData` (GUID `DD96BAAF-145E-4F56-B1CF-193256298E99`)
+- Triggering the EC switch (`0xD1`)
+- Toggling the EC MUX bit (`0x2E`, mask `0x40`)
+
+</details>
+
 ## Notes
-- This application was written with the help of AI for another person.
-- I do not accept any responsibility for any **damage** or **loss** caused by its use.
-- Tested on MSI Alpha 17 C7VG (EC firmware: `17KKIMS1.114`).
-- The tool tries to temporarily clear the immutable flag via `FS_IOC_SETFLAGS`.
-  If it fails, run:
-  `chattr -i /sys/firmware/efi/efivars/MsiDCVarData-DD96BAAF-145E-4F56-B1CF-193256298E99`
-- For EC writes, load `ec_sys` with `write_support=1`, for example:
-  `modprobe -r ec_sys && modprobe ec_sys write_support=1`
-- If `ec0` is missing, mount debugfs:
-  `mount -t debugfs none /sys/kernel/debug`
-- A reboot is required after MUX mode change.
+
+- Written with the help of AI.
