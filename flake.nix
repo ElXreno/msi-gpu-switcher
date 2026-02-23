@@ -17,7 +17,7 @@
         {
           default = pkgs.buildGoModule {
             pname = "msi-gpu-switcher";
-            version = "0.1.4"; # x-release-please-version
+            version = "0.1.5"; # x-release-please-version
 
             src = self;
             subPackages = [ "." ];
