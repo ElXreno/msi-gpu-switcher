@@ -355,7 +355,7 @@ func rootCmd() *cobra.Command {
 	var debug bool
 
 	cmd := &cobra.Command{
-		Use:   "gpu-switcher",
+		Use:   "msi-gpu-switcher",
 		Short: "GPU MUX switcher for MSI laptops",
 		Long:  "Switch primary GPU output using UEFI vars and EC trigger.",
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {

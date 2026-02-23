@@ -65,7 +65,7 @@ go build -o msi-gpu-switcher .
 ## Usage
 
 ```console
-  gpu-switcher [command]
+  msi-gpu-switcher [command]
 
 Available Commands:
   completion  Generate the autocompletion script for the specified shell
@@ -76,7 +76,7 @@ Available Commands:
 
 Flags:
       --debug   enable debug logging
-  -h, --help    help for gpu-switcher
+  -h, --help    help for msi-gpu-switcher
 ```
 
 > **A reboot is required after switching.**
