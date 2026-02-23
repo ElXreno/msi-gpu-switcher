@@ -19,7 +19,7 @@ builds:
       - -s -w
 
 archives:
-  - formats: [ tar.gz ]
+  - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
@@ -35,3 +35,6 @@ nfpms:
     formats:
       - deb
       - rpm
+
+release:
+  use_existing_draft: true
