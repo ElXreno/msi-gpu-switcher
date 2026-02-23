@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/ElXreno/msi-gpu-switcher/compare/v0.1.4...v0.1.5) (2026-02-23)
+
+
+### Bug Fixes
+
+* **main:** Proper usage entry ([b0b0cf0](https://github.com/ElXreno/msi-gpu-switcher/commit/b0b0cf05edeb6f4f8f294c16eca7c2ffa0ad379e))
+
 ## [0.1.4](https://github.com/ElXreno/msi-gpu-switcher/compare/v0.1.3...v0.1.4) (2026-02-23)
 
 
