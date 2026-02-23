@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/ElXreno/msi-gpu-switcher/compare/v0.1.3...v0.1.4) (2026-02-23)
+
+
+### Bug Fixes
+
+* **ci:** Create release PR only after goreleaser job ([07ab2fd](https://github.com/ElXreno/msi-gpu-switcher/commit/07ab2fd0fbc0ec57d53fab2330824732741c5b93))
+
 ## [0.1.3](https://github.com/ElXreno/msi-gpu-switcher/compare/v0.1.2...v0.1.3) (2026-02-23)
 
 
