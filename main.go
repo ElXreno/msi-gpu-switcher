@@ -16,11 +16,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// EC
 const (
-	ecIOPath = "/sys/kernel/debug/ec/ec0/io"
-)
-
-const (
+	ecIOPath       = "/sys/kernel/debug/ec/ec0/io"
 	ecMuxOffset    = 0x2e
 	ecMuxMask      = 0x40
 	ecSwitchOffset = 0xd1
@@ -28,6 +26,7 @@ const (
 	ecSwitchMask1  = 0x02
 )
 
+// UEFI
 const (
 	uefiVarName  = "MsiDCVarData"
 	uefiVarGuid  = "DD96BAAF-145E-4F56-B1CF-193256298E99"
@@ -35,22 +34,24 @@ const (
 	uefiModeByte = 1
 )
 
-var (
-	uefiVarPath = "/sys/firmware/efi/efivars/MsiDCVarData-DD96BAAF-145E-4F56-B1CF-193256298E99"
-)
+// UEFI too
+var uefiVarPath = "/sys/firmware/efi/efivars/" + uefiVarName + "-" + uefiVarGuid
 
 type gpuInfo struct {
-	addr   string
-	class  string
-	vendor string
-	device string
-	driver string
+	addr, class, vendor, device, driver string
 }
 
 func main() {
 	if err := rootCmd().Execute(); err != nil {
 		fatal(err)
 	}
+}
+
+func gpuLabel(discrete bool) string {
+	if discrete {
+		return "dGPU (discrete)"
+	}
+	return "iGPU (hybrid)"
 }
 
 func showStatus() error {
@@ -90,11 +91,11 @@ func printEcMux() {
 		log.Error().Msgf("  error: %v", err)
 		return
 	}
+	label := "hybrid (PXCT=0)"
 	if state {
-		log.Info().Msg("  discrete (PXCT=1)")
-	} else {
-		log.Info().Msg("  hybrid (PXCT=0)")
+		label = "discrete (PXCT=1)"
 	}
+	log.Info().Msgf("  %s", label)
 }
 
 func printEcSwitch() {
@@ -124,32 +125,22 @@ func printUefiVar() {
 		log.Error().Msgf("  error: %v", err)
 		return
 	}
+	label := "hybrid (byte[1]=0)"
 	if state {
-		log.Info().Msg("  discrete (byte[1]=1)")
-	} else {
-		log.Info().Msg("  hybrid (byte[1]=0)")
+		label = "discrete (byte[1]=1)"
 	}
-}
-
-func switchIGPU() error {
-	return switchGPU(false)
-}
-
-func switchDGPU() error {
-	return switchGPU(true)
+	log.Info().Msgf("  %s", label)
 }
 
 func switchGPU(discrete bool) error {
+	label := gpuLabel(discrete)
 	uefiSet := false
+
 	if exists(uefiVarPath) {
 		if err := setUefiGpuMode(discrete); err != nil {
 			return err
 		}
-		if discrete {
-			log.Info().Msg("UEFI target set: dGPU (discrete)")
-		} else {
-			log.Info().Msg("UEFI target set: iGPU (hybrid)")
-		}
+		log.Info().Msgf("UEFI target set: %s", label)
 		uefiSet = true
 	}
 
@@ -166,11 +157,7 @@ func switchGPU(discrete bool) error {
 			}
 			return err
 		}
-		if discrete {
-			log.Info().Msg("Requested primary GPU: dGPU (EC MUX)")
-		} else {
-			log.Info().Msg("Requested primary GPU: iGPU (EC MUX)")
-		}
+		log.Info().Msgf("Requested primary GPU: %s (EC MUX)", label)
 		return nil
 	}
 
@@ -182,7 +169,6 @@ func listGPUs() ([]gpuInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	var gpus []gpuInfo
 	for _, entry := range entries {
 		class := strings.TrimSpace(readFirstLine(filepath.Join(entry, "class")))
@@ -192,22 +178,19 @@ func listGPUs() ([]gpuInfo, error) {
 		if !strings.HasPrefix(class, "0x0300") && !strings.HasPrefix(class, "0x0302") {
 			continue
 		}
-		info := gpuInfo{
+		gpus = append(gpus, gpuInfo{
 			addr:   filepath.Base(entry),
 			class:  class,
 			vendor: strings.TrimSpace(readFirstLine(filepath.Join(entry, "vendor"))),
 			device: strings.TrimSpace(readFirstLine(filepath.Join(entry, "device"))),
 			driver: readDriver(entry),
-		}
-		gpus = append(gpus, info)
+		})
 	}
-
 	return gpus, nil
 }
 
 func readDriver(devPath string) string {
-	link := filepath.Join(devPath, "driver")
-	target, err := os.Readlink(link)
+	target, err := os.Readlink(filepath.Join(devPath, "driver"))
 	if err != nil {
 		return "unknown"
 	}
@@ -220,8 +203,7 @@ func readFirstLine(path string) string {
 		return ""
 	}
 	defer f.Close()
-	r := bufio.NewReader(f)
-	line, _ := r.ReadString('\n')
+	line, _ := bufio.NewReader(f).ReadString('\n')
 	return strings.TrimSpace(line)
 }
 
@@ -270,7 +252,6 @@ func readEcByte(offset int) (byte, error) {
 		return 0, err
 	}
 	defer f.Close()
-
 	buf := []byte{0}
 	if _, err := f.ReadAt(buf, int64(offset)); err != nil {
 		return 0, err
@@ -285,12 +266,9 @@ func writeEcByte(offset int, value byte) error {
 		return err
 	}
 	defer f.Close()
-
 	log.Debug().Msgf("ec write [0x%02x]=0x%02x", offset, value)
-	if _, err := f.WriteAt([]byte{value}, int64(offset)); err != nil {
-		return err
-	}
-	return nil
+	_, err = f.WriteAt([]byte{value}, int64(offset))
+	return err
 }
 
 func readUefiGpuMode() (bool, error) {
@@ -341,18 +319,17 @@ func writeUefiVar(attrs uint32, data []byte) error {
 	payload := make([]byte, uefiDataBase+len(data))
 	binary.LittleEndian.PutUint32(payload[:uefiDataBase], attrs)
 	copy(payload[uefiDataBase:], data)
+
 	restore, err := makeUefiVarMutable()
 	if err != nil {
 		return fmt.Errorf("prepare uefi var failed: %w", err)
 	}
-	if err := os.WriteFile(uefiVarPath, payload, 0o644); err != nil {
-		if restore != nil {
-			restore()
-		}
-		return fmt.Errorf("write uefi var failed: %w", err)
-	}
 	if restore != nil {
-		restore()
+		defer restore()
+	}
+
+	if err := os.WriteFile(uefiVarPath, payload, 0o644); err != nil {
+		return fmt.Errorf("write uefi var failed: %w", err)
 	}
 	return nil
 }
@@ -363,7 +340,7 @@ func triggerEcSwitch() error {
 		return err
 	}
 	log.Debug().Msgf("ec switch before: 0x%02x", value)
-	value &^= (ecSwitchMask0 | ecSwitchMask1)
+	value &^= ecSwitchMask0 | ecSwitchMask1
 	value |= ecSwitchMask0
 	log.Debug().Msgf("ec switch after: 0x%02x", value)
 	return writeEcByte(ecSwitchOffset, value)
@@ -380,30 +357,27 @@ func rootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gpu-switcher",
 		Short: "GPU MUX switcher for MSI laptops",
-		Long: "Switch primary GPU output using UEFI vars and EC trigger.",
+		Long:  "Switch primary GPU output using UEFI vars and EC trigger.",
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
 			if debug {
 				zerolog.SetGlobalLevel(zerolog.DebugLevel)
 			}
 		},
 	}
-
 	cmd.PersistentFlags().BoolVar(&debug, "debug", false, "enable debug logging")
 
 	cmd.AddCommand(
 		&cobra.Command{
 			Use:   "status",
 			Short: "Show current GPU/MUX/UEFI status",
-			RunE: func(_ *cobra.Command, _ []string) error {
-				return showStatus()
-			},
+			RunE:  func(_ *cobra.Command, _ []string) error { return showStatus() },
 		},
 		&cobra.Command{
 			Use:   "igpu",
 			Short: "Switch to iGPU (hybrid)",
 			RunE: func(_ *cobra.Command, _ []string) error {
 				requireRoot()
-				return switchIGPU()
+				return switchGPU(false)
 			},
 		},
 		&cobra.Command{
@@ -411,12 +385,30 @@ func rootCmd() *cobra.Command {
 			Short: "Switch to dGPU (discrete)",
 			RunE: func(_ *cobra.Command, _ []string) error {
 				requireRoot()
-				return switchDGPU()
+				return switchGPU(true)
 			},
 		},
 	)
-
 	return cmd
+}
+
+func restoreImmutable(path string) {
+	f, err := os.Open(path)
+	if err == nil {
+		flags, err := unix.IoctlGetInt(int(f.Fd()), unix.FS_IOC_GETFLAGS)
+		if err == nil {
+			if err := unix.IoctlSetInt(int(f.Fd()), unix.FS_IOC_SETFLAGS, flags|int(unix.STATX_ATTR_IMMUTABLE)); err == nil {
+				log.Debug().Msg("restored immutable flag via ioctl")
+				_ = f.Close()
+				return
+			}
+		}
+		_ = f.Close()
+	}
+	log.Debug().Msg("ioctl restore failed, falling back to chattr +i")
+	if out, err := exec.Command("chattr", "+i", path).CombinedOutput(); err != nil {
+		log.Warn().Msgf("chattr +i failed: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
 }
 
 func makeUefiVarMutable() (func(), error) {
@@ -427,61 +419,23 @@ func makeUefiVarMutable() (func(), error) {
 		}
 		return nil, err
 	}
+	defer fd.Close()
 
-	// Try ioctl first
 	flags, err := unix.IoctlGetInt(int(fd.Fd()), unix.FS_IOC_GETFLAGS)
 	if err == nil {
 		if flags&int(unix.STATX_ATTR_IMMUTABLE) == 0 {
-			_ = fd.Close()
 			return nil, nil
 		}
 		newFlags := flags &^ int(unix.STATX_ATTR_IMMUTABLE)
 		if err := unix.IoctlSetInt(int(fd.Fd()), unix.FS_IOC_SETFLAGS, newFlags); err == nil {
 			log.Debug().Msg("cleared immutable flag via ioctl")
-			restore := func() {
-				if err := unix.IoctlSetInt(int(fd.Fd()), unix.FS_IOC_SETFLAGS, flags); err != nil {
-					log.Warn().Msgf("ioctl restore failed (%v), falling back to chattr +i", err)
-					_ = fd.Close()
-					cmd := exec.Command("chattr", "+i", uefiVarPath)
-					if out, err := cmd.CombinedOutput(); err != nil {
-						log.Warn().Msgf("chattr +i failed: %v (%s)", err, strings.TrimSpace(string(out)))
-					}
-					return
-				}
-				_ = fd.Close()
-			}
-			return restore, nil
+			return func() { restoreImmutable(uefiVarPath) }, nil
 		}
 	}
-	_ = fd.Close()
 
-	// Fallback to chattr
 	log.Debug().Msg("ioctl failed, falling back to chattr -i")
-	cmd := exec.Command("chattr", "-i", uefiVarPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := exec.Command("chattr", "-i", uefiVarPath).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("chattr -i failed: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
-
-	restore := func() {
-		rfd, err := os.Open(uefiVarPath)
-		if err == nil {
-			flags, err := unix.IoctlGetInt(int(rfd.Fd()), unix.FS_IOC_GETFLAGS)
-			if err == nil {
-				newFlags := flags | int(unix.STATX_ATTR_IMMUTABLE)
-				if err := unix.IoctlSetInt(int(rfd.Fd()), unix.FS_IOC_SETFLAGS, newFlags); err == nil {
-					log.Debug().Msg("restored immutable flag via ioctl")
-					_ = rfd.Close()
-					return
-				}
-			}
-			_ = rfd.Close()
-		}
-		log.Debug().Msg("ioctl restore failed, falling back to chattr +i")
-		cmd := exec.Command("chattr", "+i", uefiVarPath)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			log.Warn().Msgf("chattr +i failed: %v (%s)", err, strings.TrimSpace(string(out)))
-		}
-	}
-	return restore, nil
+	return func() { restoreImmutable(uefiVarPath) }, nil
 }
-
