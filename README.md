@@ -8,12 +8,14 @@ Minimal GPU MUX switcher for MSI laptops on Linux.
 
 ## Tested Hardware
 
-| Laptop | EC Firmware |
-|--------|-------------|
-| MSI Alpha 17 C7VG | `17KKIMS1.114` |
+| Laptop | EC Firmware | Backend |
+|--------|-------------|---------|
+| MSI Alpha 17 C7VG | `17KKIMS1.114` | `legacy` |
+| MSI Titan 18 HX Dragon Edition Draco Epic A2WJ | `1824EMS1.509` | `three-mode` (hybrid and discrete) |
 
 > Other MSI models may work if they share the same UEFI variable and EC layout.
-> Open an issue with your model and firmware version if it works or fails.
+> Open an issue with the output of `sudo msi-gpu-switcher status --debug` and
+> say whether switching worked.
 
 ## Requirements
 
@@ -69,15 +71,19 @@ go build -o msi-gpu-switcher .
 
 Available Commands:
   completion  Generate the autocompletion script for the specified shell
-  dgpu        Switch to dGPU (discrete)
+  dgpu        Switch to discrete (dGPU only)
   help        Help about any command
-  igpu        Switch to iGPU (hybrid)
+  hybrid      Switch to hybrid (iGPU drives the display, dGPU on demand)
+  integrated  Switch to integrated (iGPU only, dGPU off)
   status      Show current GPU/MUX/UEFI status
 
 Flags:
       --debug   enable debug logging
   -h, --help    help for msi-gpu-switcher
 ```
+
+`igpu` still works as an alias for `hybrid`, `discrete` for `dgpu` and `uma` for
+`integrated`. `integrated` is only offered where the firmware supports it.
 
 > **A reboot is required after switching.**
 
@@ -104,10 +110,29 @@ mount -t debugfs none /sys/kernel/debug
 <details>
 <summary>Low-level details</summary>
 
-Switches the primary GPU output by:
-- Writing the UEFI variable `MsiDCVarData` (GUID `DD96BAAF-145E-4F56-B1CF-193256298E99`)
-- Triggering the EC switch (`0xD1`)
-- Toggling the EC MUX bit (`0x2E`, mask `0x40`)
+The firmware applies the GPU mode at boot. The tool leaves it a request through
+the UEFI variable `MsiDCVarData` (GUID `DD96BAAF-145E-4F56-B1CF-193256298E99`)
+and the EC, and picks one of two backends depending on what the firmware
+reports. `status` shows which one is in use.
+
+**`three-mode`** is used when bit 4 of data byte 5 of `MsiDCVarData` is
+set, which is how MSI Center recognises firmware with the three-mode switch.
+It does what MSI Center does:
+- Writes the requested mode (0 hybrid, 1 discrete, 2 integrated) into bits 0-1
+  of data byte 5, leaving the rest of the variable as it was. Bits 2-3 hold the
+  mode applied at boot, bit 5 says integrated mode is supported and a set bit 6
+  means discrete mode is not.
+- Sets bit 0 of EC register `0xD1`. The EC raises ACPI query `_Q90`, which
+  triggers software SMI `0x11`, and the firmware stores the request.
+- Waits for the firmware to acknowledge it with bit 1 of `0xD1`.
+
+**`legacy`** is the original path for older firmware, such as the Alpha 17:
+- Writes data byte 1 of `MsiDCVarData`
+- Triggers the EC switch (`0xD1`)
+- Toggles the EC MUX bit (`0x2E`, mask `0x40`)
+
+The layout of data byte 5 and the SMI it ends in were first worked out in
+[ege-adam/msi-gpu-mode](https://github.com/ege-adam/msi-gpu-mode).
 
 </details>
 

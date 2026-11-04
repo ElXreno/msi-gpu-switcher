@@ -1,352 +1,23 @@
 package main
 
 import (
-	"bufio"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"golang.org/x/sys/unix"
+
+	"msi-gpu-switcher/internal/switcher"
+	"msi-gpu-switcher/internal/sysinfo"
 )
-
-// EC
-const (
-	ecIOPath       = "/sys/kernel/debug/ec/ec0/io"
-	ecMuxOffset    = 0x2e
-	ecMuxMask      = 0x40
-	ecSwitchOffset = 0xd1
-	ecSwitchMask0  = 0x01
-	ecSwitchMask1  = 0x02
-)
-
-// UEFI
-const (
-	uefiVarName  = "MsiDCVarData"
-	uefiVarGuid  = "DD96BAAF-145E-4F56-B1CF-193256298E99"
-	uefiDataBase = 4
-	uefiModeByte = 1
-)
-
-// UEFI too
-var uefiVarPath = "/sys/firmware/efi/efivars/" + uefiVarName + "-" + uefiVarGuid
-
-type gpuInfo struct {
-	addr, class, vendor, device, driver string
-}
 
 func main() {
 	if err := rootCmd().Execute(); err != nil {
 		fatal(err)
 	}
-}
-
-func gpuLabel(discrete bool) string {
-	if discrete {
-		return "dGPU (discrete)"
-	}
-	return "iGPU (hybrid)"
-}
-
-func showStatus() error {
-	printGpuDevices()
-	printEcMux()
-	printEcSwitch()
-	printUefiVar()
-	return nil
-}
-
-func printGpuDevices() {
-	log.Info().Msg("GPU devices:")
-	gpus, err := listGPUs()
-	if err != nil {
-		log.Error().Msgf("  error: %v", err)
-		return
-	}
-	if len(gpus) == 0 {
-		log.Info().Msg("  (none found)")
-		return
-	}
-	for _, g := range gpus {
-		log.Info().Msgf("  %s class=%s vendor=%s device=%s driver=%s",
-			g.addr, g.class, g.vendor, g.device, g.driver)
-	}
-}
-
-func printEcMux() {
-	log.Info().Msg("")
-	log.Info().Msg("EC MUX:")
-	if !exists(ecIOPath) {
-		log.Info().Msg("  not available (ec_sys/debugfs)")
-		return
-	}
-	state, err := readEcMuxState()
-	if err != nil {
-		log.Error().Msgf("  error: %v", err)
-		return
-	}
-	label := "hybrid (PXCT=0)"
-	if state {
-		label = "discrete (PXCT=1)"
-	}
-	log.Info().Msgf("  %s", label)
-}
-
-func printEcSwitch() {
-	log.Info().Msg("")
-	log.Info().Msg("EC switch trigger:")
-	if !exists(ecIOPath) {
-		log.Info().Msg("  not available (ec_sys/debugfs)")
-		return
-	}
-	value, err := readEcByte(ecSwitchOffset)
-	if err != nil {
-		log.Error().Msgf("  error: %v", err)
-		return
-	}
-	log.Info().Msgf("  0x%02x (bits0/1=%d%d)", value, (value&ecSwitchMask1)>>1, value&ecSwitchMask0)
-}
-
-func printUefiVar() {
-	log.Info().Msg("")
-	log.Info().Msg("UEFI var:")
-	if !exists(uefiVarPath) {
-		log.Info().Msg("  not available (efivarfs)")
-		return
-	}
-	state, err := readUefiGpuMode()
-	if err != nil {
-		log.Error().Msgf("  error: %v", err)
-		return
-	}
-	label := "hybrid (byte[1]=0)"
-	if state {
-		label = "discrete (byte[1]=1)"
-	}
-	log.Info().Msgf("  %s", label)
-}
-
-func switchGPU(discrete bool) error {
-	label := gpuLabel(discrete)
-	uefiSet := false
-
-	if exists(uefiVarPath) {
-		if err := setUefiGpuMode(discrete); err != nil {
-			return err
-		}
-		log.Info().Msgf("UEFI target set: %s", label)
-		uefiSet = true
-	}
-
-	if exists(ecIOPath) {
-		if uefiSet {
-			if err := triggerEcSwitch(); err != nil {
-				log.Warn().Msgf("EC switch trigger failed: %v (is ec_sys write_support=1?)", err)
-			}
-		}
-		if err := setEcMux(discrete); err != nil {
-			if uefiSet {
-				log.Warn().Msgf("EC MUX write failed: %v (is ec_sys write_support=1?)", err)
-				return nil
-			}
-			return err
-		}
-		log.Info().Msgf("Requested primary GPU: %s (EC MUX)", label)
-		return nil
-	}
-
-	return errors.New("EC MUX is not available; cannot switch without ec_sys/debugfs")
-}
-
-func listGPUs() ([]gpuInfo, error) {
-	entries, err := filepath.Glob("/sys/bus/pci/devices/*")
-	if err != nil {
-		return nil, err
-	}
-	var gpus []gpuInfo
-	for _, entry := range entries {
-		class := strings.TrimSpace(readFirstLine(filepath.Join(entry, "class")))
-		if class == "" {
-			continue
-		}
-		if !strings.HasPrefix(class, "0x0300") && !strings.HasPrefix(class, "0x0302") {
-			continue
-		}
-		gpus = append(gpus, gpuInfo{
-			addr:   filepath.Base(entry),
-			class:  class,
-			vendor: strings.TrimSpace(readFirstLine(filepath.Join(entry, "vendor"))),
-			device: strings.TrimSpace(readFirstLine(filepath.Join(entry, "device"))),
-			driver: readDriver(entry),
-		})
-	}
-	return gpus, nil
-}
-
-func readDriver(devPath string) string {
-	target, err := os.Readlink(filepath.Join(devPath, "driver"))
-	if err != nil {
-		return "unknown"
-	}
-	return filepath.Base(target)
-}
-
-func readFirstLine(path string) string {
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	line, _ := bufio.NewReader(f).ReadString('\n')
-	return strings.TrimSpace(line)
-}
-
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func requireRoot() {
-	if os.Geteuid() != 0 {
-		fatal(errors.New("this command requires root"))
-	}
-}
-
-func fatal(err error) {
-	log.Error().Msgf("error: %v", err)
-	os.Exit(1)
-}
-
-func readEcMuxState() (bool, error) {
-	value, err := readEcByte(ecMuxOffset)
-	if err != nil {
-		return false, err
-	}
-	return (value & ecMuxMask) != 0, nil
-}
-
-func setEcMux(discrete bool) error {
-	value, err := readEcByte(ecMuxOffset)
-	if err != nil {
-		return err
-	}
-	log.Debug().Msgf("ec mux before: 0x%02x", value)
-	if discrete {
-		value |= ecMuxMask
-	} else {
-		value &^= ecMuxMask
-	}
-	log.Debug().Msgf("ec mux after: 0x%02x", value)
-	return writeEcByte(ecMuxOffset, value)
-}
-
-func readEcByte(offset int) (byte, error) {
-	f, err := os.Open(ecIOPath)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	buf := []byte{0}
-	if _, err := f.ReadAt(buf, int64(offset)); err != nil {
-		return 0, err
-	}
-	log.Debug().Msgf("ec read [0x%02x]=0x%02x", offset, buf[0])
-	return buf[0], nil
-}
-
-func writeEcByte(offset int, value byte) error {
-	f, err := os.OpenFile(ecIOPath, os.O_RDWR, 0)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	log.Debug().Msgf("ec write [0x%02x]=0x%02x", offset, value)
-	_, err = f.WriteAt([]byte{value}, int64(offset))
-	return err
-}
-
-func readUefiGpuMode() (bool, error) {
-	_, data, err := readUefiVar()
-	if err != nil {
-		return false, err
-	}
-	if len(data) <= uefiModeByte {
-		return false, fmt.Errorf("uefi var too small: %d bytes", len(data))
-	}
-	return data[uefiModeByte] == 1, nil
-}
-
-func setUefiGpuMode(discrete bool) error {
-	attrs, data, err := readUefiVar()
-	if err != nil {
-		return err
-	}
-	if len(data) <= uefiModeByte {
-		return fmt.Errorf("uefi var too small: %d bytes", len(data))
-	}
-	before := data[uefiModeByte]
-	if discrete {
-		data[uefiModeByte] = 1
-	} else {
-		data[uefiModeByte] = 0
-	}
-	log.Debug().Msgf("uefi %s[%d] before=0x%02x after=0x%02x", uefiVarName, uefiModeByte, before, data[uefiModeByte])
-	return writeUefiVar(attrs, data)
-}
-
-func readUefiVar() (uint32, []byte, error) {
-	raw, err := os.ReadFile(uefiVarPath)
-	if err != nil {
-		return 0, nil, err
-	}
-	if len(raw) < uefiDataBase {
-		return 0, nil, fmt.Errorf("uefi var too small: %d bytes", len(raw))
-	}
-	attrs := binary.LittleEndian.Uint32(raw[:uefiDataBase])
-	data := make([]byte, len(raw)-uefiDataBase)
-	copy(data, raw[uefiDataBase:])
-	log.Debug().Msgf("uefi %s attrs=0x%08x len=%d", uefiVarName, attrs, len(data))
-	return attrs, data, nil
-}
-
-func writeUefiVar(attrs uint32, data []byte) error {
-	payload := make([]byte, uefiDataBase+len(data))
-	binary.LittleEndian.PutUint32(payload[:uefiDataBase], attrs)
-	copy(payload[uefiDataBase:], data)
-
-	wasImmutable, err := setUefiVarImmutable(false)
-	if err != nil {
-		return fmt.Errorf("clear immutable flag: %w", err)
-	}
-	if wasImmutable {
-		defer func() {
-			if _, err := setUefiVarImmutable(true); err != nil {
-				log.Warn().Msgf("restore immutable flag on %s: %v", uefiVarPath, err)
-			}
-		}()
-	}
-
-	if err := os.WriteFile(uefiVarPath, payload, 0o644); err != nil {
-		return fmt.Errorf("write uefi var failed: %w", err)
-	}
-	return nil
-}
-
-func triggerEcSwitch() error {
-	value, err := readEcByte(ecSwitchOffset)
-	if err != nil {
-		return err
-	}
-	log.Debug().Msgf("ec switch before: 0x%02x", value)
-	value &^= ecSwitchMask0 | ecSwitchMask1
-	value |= ecSwitchMask0
-	log.Debug().Msgf("ec switch after: 0x%02x", value)
-	return writeEcByte(ecSwitchOffset, value)
 }
 
 func init() {
@@ -358,9 +29,11 @@ func rootCmd() *cobra.Command {
 	var debug bool
 
 	cmd := &cobra.Command{
-		Use:   "msi-gpu-switcher",
-		Short: "GPU MUX switcher for MSI laptops",
-		Long:  "Switch primary GPU output using UEFI vars and EC trigger.",
+		Use:           "msi-gpu-switcher",
+		Short:         "GPU MUX switcher for MSI laptops",
+		Long:          "Switch the GPU mode of MSI laptops through the firmware's UEFI variable and EC interface.",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
 			if debug {
 				zerolog.SetGlobalLevel(zerolog.DebugLevel)
@@ -373,55 +46,116 @@ func rootCmd() *cobra.Command {
 		&cobra.Command{
 			Use:   "status",
 			Short: "Show current GPU/MUX/UEFI status",
+			Args:  cobra.NoArgs,
 			RunE:  func(_ *cobra.Command, _ []string) error { return showStatus() },
 		},
-		&cobra.Command{
-			Use:   "igpu",
-			Short: "Switch to iGPU (hybrid)",
-			RunE: func(_ *cobra.Command, _ []string) error {
-				requireRoot()
-				return switchGPU(false)
-			},
-		},
-		&cobra.Command{
-			Use:   "dgpu",
-			Short: "Switch to dGPU (discrete)",
-			RunE: func(_ *cobra.Command, _ []string) error {
-				requireRoot()
-				return switchGPU(true)
-			},
-		},
+		switchCmd("hybrid", []string{"igpu"}, switcher.Hybrid),
+		switchCmd("dgpu", []string{"discrete"}, switcher.Discrete),
+		switchCmd("integrated", []string{"uma"}, switcher.Integrated),
 	)
 	return cmd
 }
 
-const fsImmutableFl = 0x10
+func switchCmd(use string, aliases []string, m switcher.Mode) *cobra.Command {
+	return &cobra.Command{
+		Use:     use,
+		Aliases: aliases,
+		Short:   "Switch to " + m.Label(),
+		Args:    cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			requireRoot()
+			return switchMode(m)
+		},
+	}
+}
 
-func setUefiVarImmutable(on bool) (bool, error) {
-	f, err := os.Open(uefiVarPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+func switchMode(m switcher.Mode) error {
+	b := switcher.Detect(switcher.SystemEnv())
+	if b == nil {
+		return errors.New("no supported GPU switch found on this machine")
 	}
-	if err != nil {
-		return false, err
+	if !switcher.Supports(b, m) {
+		return fmt.Errorf("%s does not offer %s mode (available: %s)", b.Name(), m, joinModes(b.Modes()))
 	}
-	defer func() { _ = f.Close() }()
+	if err := b.Switch(m); err != nil {
+		if errors.Is(err, switcher.ErrAlreadyActive) {
+			log.Info().Msgf("Already in %s, nothing to do.", m.Label())
+			return nil
+		}
+		return err
+	}
+	log.Info().Msgf("Requested %s via %s. Reboot to apply.", m.Label(), b.Name())
+	return nil
+}
 
-	flags, err := unix.IoctlGetUint32(int(f.Fd()), unix.FS_IOC_GETFLAGS)
-	if errors.Is(err, unix.ENOTTY) || errors.Is(err, unix.EOPNOTSUPP) {
-		return false, nil
+func showStatus() error {
+	env := switcher.SystemEnv()
+	printMachine(env.Machine)
+	printGPUs()
+
+	b := switcher.Detect(env)
+	if b == nil {
+		log.Info().Msg("Backend: none")
+		return nil
 	}
+	st := b.Status()
+	log.Info().Msgf("Backend: %s", b.Name())
+	log.Info().Msgf("Modes: %s", joinModes(b.Modes()))
+	log.Info().Msgf("Current: %s", modeOrUnknown(st.Current))
+	if st.Requested != nil {
+		log.Info().Msgf("Requested: %s", st.Requested)
+	}
+	for _, d := range st.Details {
+		log.Info().Msgf("%s: %s", d.Name, d.Value)
+	}
+	return nil
+}
+
+func printMachine(m sysinfo.Machine) {
+	ec := m.EC
+	if ec == "" {
+		ec = "unknown (msi-ec not loaded)"
+	}
+	log.Info().Msgf("Machine: %s %s (board %s, BIOS %s, EC %s)", m.Vendor, m.Product, m.Board, m.BIOS, ec)
+}
+
+func printGPUs() {
+	gpus, err := sysinfo.GPUs()
 	if err != nil {
-		return false, err
+		log.Error().Msgf("GPU devices: error: %v", err)
+		return
 	}
-	was := flags&fsImmutableFl != 0
-	if was == on {
-		return was, nil
+	if len(gpus) == 0 {
+		log.Info().Msg("GPU devices: none found")
+		return
 	}
-	flags ^= fsImmutableFl
-	if err := unix.IoctlSetPointerInt(int(f.Fd()), unix.FS_IOC_SETFLAGS, int(flags)); err != nil {
-		return was, err
+	for _, g := range gpus {
+		log.Info().Msgf("GPU: %s class=%s vendor=%s device=%s driver=%s", g.Addr, g.Class, g.Vendor, g.Device, g.Driver)
 	}
-	log.Debug().Msgf("immutable flag on %s set to %v", uefiVarPath, on)
-	return was, nil
+}
+
+func joinModes(modes []switcher.Mode) string {
+	names := make([]string, len(modes))
+	for i, m := range modes {
+		names[i] = m.String()
+	}
+	return strings.Join(names, ", ")
+}
+
+func modeOrUnknown(m *switcher.Mode) string {
+	if m == nil {
+		return "unknown"
+	}
+	return m.Label()
+}
+
+func requireRoot() {
+	if os.Geteuid() != 0 {
+		fatal(errors.New("this command requires root"))
+	}
+}
+
+func fatal(err error) {
+	log.Error().Msgf("error: %v", err)
+	os.Exit(1)
 }
