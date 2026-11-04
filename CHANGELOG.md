@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/ElXreno/msi-gpu-switcher/compare/v0.1.5...v0.2.0) (2026-11-04)
+
+
+### Features
+
+* support MSI Center's three-mode GPU switch ([4489106](https://github.com/ElXreno/msi-gpu-switcher/commit/44891066e70a58e2ef1041afdbf6b13af9c44e5c))
+
+
+### Bug Fixes
+
+* pass the flags to FS_IOC_SETFLAGS by pointer ([bdba60b](https://github.com/ElXreno/msi-gpu-switcher/commit/bdba60b8c48b124264e823b6c4204c80ffb4c4a1))
+
 ## [0.1.5](https://github.com/ElXreno/msi-gpu-switcher/compare/v0.1.4...v0.1.5) (2026-02-23)
 
 
